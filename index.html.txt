@@ -1,0 +1,75 @@
+index.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Predictive Parking Marketplace</title>
+  <style>
+    body { font-family: Arial; background: #f5f5f5; padding: 20px; }
+    h1 { color: #333; }
+    table { border-collapse: collapse; width: 100%; margin-top: 20px; }
+    th, td { border: 1px solid #ccc; padding: 10px; text-align: center; }
+    th { background: #007BFF; color: white; }
+    button { padding: 6px 10px; background: #007BFF; color: white; border: none; border-radius: 5px; }
+    button:hover { background: #0056b3; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>🚗 Predictive Parking Space Marketplace</h1>
+  <button onclick="addSpace()">➕ Add Sample Space</button>
+  <table id="spaceTable">
+    <thead>
+      <tr>
+        <th>Space ID</th>
+        <th>Location</th>
+        <th>Status</th>
+        <th>Predicted Free Probability</th>
+        <th>Reserve</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  </table>
+
+  <script>
+    async function fetchSpaces() {
+      const res = await fetch("/api/spaces");
+      const data = await res.json();
+      const tbody = document.querySelector("#spaceTable tbody");
+      tbody.innerHTML = "";
+      data.forEach(s => {
+        const row = `<tr>
+          <td>${s.space_id}</td>
+          <td>${s.location}</td>
+          <td>${s.occupied ? "Occupied" : "Free"}</td>
+          <td>${(s.predicted_free_prob * 100).toFixed(0)}%</td>
+          <td><button onclick="reserve('${s.space_id}')">Reserve</button></td>
+        </tr>`;
+        tbody.innerHTML += row;
+      });
+    }
+
+    async function addSpace() {
+      await fetch("/api/create_space", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ space_id: "A" + Math.floor(Math.random()*100), location: "Zone 1" })
+      });
+      fetchSpaces();
+    }
+
+    async function reserve(id) {
+      const res = await fetch("/api/reserve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ space_id: id, user: "demo_user", duration: 15 })
+      });
+      const msg = await res.json();
+      alert(msg.message);
+      fetchSpaces();
+    }
+
+    fetchSpaces();
+    setInterval(fetchSpaces, 5000);
+  </script>
+</body>
+</html>

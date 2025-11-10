@@ -1,0 +1,110 @@
+app.py
+from flask import Flask, request, jsonify, render_template
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime, timedelta
+import pandas as pd
+
+app = Flask(__name__)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///parking.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
+
+# ---------- DATABASE MODELS ----------
+class Space(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    space_id = db.Column(db.String, unique=True, nullable=False)
+    location = db.Column(db.String)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Occupancy(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    space_id = db.Column(db.String, db.ForeignKey('space.space_id'))
+    occupied = db.Column(db.Boolean, nullable=False)
+    ts = db.Column(db.DateTime, default=datetime.utcnow)
+
+class Reservation(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    space_id = db.Column(db.String, db.ForeignKey('space.space_id'))
+    user = db.Column(db.String, nullable=False)
+    start_ts = db.Column(db.DateTime, default=datetime.utcnow)
+    end_ts = db.Column(db.DateTime)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+with app.app_context():
+    db.create_all()
+
+# ---------- UTILITY FUNCTIONS ----------
+def get_recent_df(space_id, hours=24):
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    data = Occupancy.query.filter(Occupancy.space_id == space_id, Occupancy.ts >= cutoff).all()
+    if not data:
+        return pd.DataFrame(columns=["ts", "occupied"])
+    df = pd.DataFrame([{"ts": d.ts, "occupied": int(d.occupied)} for d in data])
+    df.set_index("ts", inplace=True)
+    return df
+
+def predict_free_probability(space_id):
+    df = get_recent_df(space_id, hours=48)
+    if df.empty:
+        return 0.5
+    last_hour = df.resample("1H").ffill().mean()
+    recent_rate = last_hour["occupied"].iloc[-1]
+    prob_free = 1 - recent_rate
+    return round(prob_free, 2)
+
+# ---------- API ROUTES ----------
+@app.route("/")
+def home():
+    return render_template("index.html")
+
+@app.route("/api/create_space", methods=["POST"])
+def create_space():
+    data = request.json
+    new_space = Space(space_id=data["space_id"], location=data.get("location", "Unknown"))
+    db.session.add(new_space)
+    db.session.commit()
+    return jsonify({"message": "Space added successfully!"})
+
+@app.route("/api/report", methods=["POST"])
+def report_occupancy():
+    data = request.json
+    occ = Occupancy(space_id=data["space_id"], occupied=data["occupied"], ts=datetime.utcnow())
+    db.session.add(occ)
+    db.session.commit()
+    return jsonify({"message": "Occupancy updated."})
+
+@app.route("/api/spaces", methods=["GET"])
+def get_spaces():
+    spaces = Space.query.all()
+    response = []
+    for s in spaces:
+        df = get_recent_df(s.space_id)
+        occupied = bool(df["occupied"].iloc[-1]) if not df.empty else False
+        prediction = predict_free_probability(s.space_id)
+        response.append({
+            "space_id": s.space_id,
+            "location": s.location,
+            "occupied": occupied,
+            "predicted_free_prob": prediction
+        })
+    return jsonify(response)
+
+@app.route("/api/reserve", methods=["POST"])
+def reserve_space():
+    data = request.json
+    space_id = data["space_id"]
+    user = data["user"]
+    duration = data.get("duration", 30)  # minutes
+    start = datetime.utcnow()
+    end = start + timedelta(minutes=duration)
+    # check if already reserved
+    active = Reservation.query.filter(Reservation.space_id == space_id, Reservation.end_ts > datetime.utcnow()).first()
+    if active:
+        return jsonify({"message": "Space already reserved!"}), 400
+    res = Reservation(space_id=space_id, user=user, start_ts=start, end_ts=end)
+    db.session.add(res)
+    db.session.commit()
+    return jsonify({"message": "Reservation confirmed!"})
+
+if __name__ == "__main__":
+    app.run(debug=True)
